@@ -1,0 +1,57 @@
+{
+  "arcane-11": {
+    "fingerprint": "c3e1570976cdbe6a",
+    "name": "Ivor the Devout",
+    "summary": "Hill Dwarf Sorcerer 11"
+  },
+  "brute-20": {
+    "fingerprint": "59508a1776d1440a",
+    "name": "Lyra Saltbeard",
+    "summary": "High Elf Fighter 20"
+  },
+  "crypt-warden": {
+    "fingerprint": "9788fb756bd3a978",
+    "name": "Ghost",
+    "summary": "Medium undead CR 4"
+  },
+  "divine-17": {
+    "fingerprint": "5bba4a6044513f06",
+    "name": "Cordell Netherby",
+    "summary": "Half-Orc Paladin 17"
+  },
+  "expert-8-pointbuy": {
+    "fingerprint": "2c99c512c6bf9b1d",
+    "name": "Edda",
+    "summary": "High Elf Rogue 8"
+  },
+  "face-3-constrained": {
+    "fingerprint": "e344249ec951fe3c",
+    "name": "Jenna Ironmonger",
+    "summary": "High Elf Bard 3"
+  },
+  "generated-5": {
+    "fingerprint": "b1baeb68452a09f1",
+    "name": "Withered Mourner",
+    "summary": "Medium undead CR 5"
+  },
+  "goblin-fixed": {
+    "fingerprint": "bea4618e457bba9e",
+    "name": "Goblin",
+    "summary": "Small humanoid CR 1/4"
+  },
+  "scout-5": {
+    "fingerprint": "32329bc344534243",
+    "name": "Wren Emberly",
+    "summary": "Human Ranger 5"
+  },
+  "variant-5": {
+    "fingerprint": "3be85791bf01144d",
+    "name": "Hardened Quick Vampire Spawn",
+    "summary": "Medium undead CR 4"
+  },
+  "warrior-1": {
+    "fingerprint": "74a49e8037b2c645",
+    "name": "Bryn Underhill",
+    "summary": "Human Fighter 1"
+  }
+}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sheetforge - seeded NPC and enemy sheets</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">Sheetforge</div>
+
+  <div class="group tabs" id="kindtabs">
+    <button class="tab" data-kind="character" aria-pressed="true">NPC Character</button>
+    <button class="tab" data-kind="creature" aria-pressed="false">Enemy Creature</button>
+  </div>
+
+  <div class="group">
+    <label class="lbl" for="seed">Seed</label>
+    <input id="seed" class="txt" type="text" value="ember-raven-4172" spellcheck="false">
+    <button id="reseed" class="icon" title="Random seed">&#9861;</button>
+  </div>
+
+  <button id="generate" class="primary">Generate</button>
+
+  <div class="spacer"></div>
+
+  <div class="group">
+    <label class="lbl" for="batchcount">Batch</label>
+    <input id="batchcount" class="num" type="number" min="1" max="24" value="4">
+    <button id="batch" class="ghost" title="Generate this many with derived seeds">Generate group</button>
+  </div>
+
+  <div class="group">
+    <button id="copymd" class="ghost" title="Copy the Markdown sheet">Copy MD</button>
+    <button id="savejson" class="ghost" title="Download the canonical JSON">Save</button>
+    <button id="load" class="ghost" title="Load a saved sheet">Load</button>
+    <input id="loadfile" type="file" accept="application/json,.json" hidden>
+  </div>
+</header>
+
+<div class="workspace">
+  <aside class="side" id="side"></aside>
+
+  <main class="stage">
+    <nav class="viewtabs" id="viewtabs">
+      <button class="vtab" data-view="sheet" aria-pressed="true">Sheet</button>
+      <button class="vtab" data-view="markdown" aria-pressed="false">Markdown</button>
+      <button class="vtab" data-view="json" aria-pressed="false">JSON</button>
+      <button class="vtab" data-view="inspector" aria-pressed="false">Inspector</button>
+      <span class="spacer"></span>
+      <span class="rerolls" id="rerollbar"></span>
+    </nav>
+    <div class="scroll" id="output"></div>
+  </main>
+
+  <aside class="roster" id="roster" hidden></aside>
+</div>
+
+<footer class="status">
+  <span id="st-seed" class="mono">&mdash;</span>
+  <span id="st-valid">&mdash;</span>
+  <span id="st-fingerprint" class="mono dim">&mdash;</span>
+  <span class="spacer"></span>
+  <span id="st-hint" class="dim"></span>
+</footer>
+
+<script type="module" src="./src/ui/app.js"></script>
+</body>
+</html>
