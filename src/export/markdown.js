@@ -297,6 +297,72 @@ function generationSection(sheet) {
   return out;
 }
 
+// --- encounter --------------------------------------------------------------------
+
+/**
+ * A group as a DM would want it on one page: the roster and the difficulty
+ * arithmetic first, so the encounter can be run from the summary alone, then
+ * every member's full stat block underneath it.
+ *
+ * `sheets` is optional -- passing only the encounter gives the one-page summary
+ * without the stat blocks, which is what fits on an index card.
+ */
+export function encounterMarkdown(encounter, sheets = []) {
+  const e = encounter;
+  let out = '';
+
+  out += heading(`Encounter — ${e.difficulty.label} for ${e.party.size} characters at level ${e.party.level}`, 1);
+  out += `*${e.composition.summary} · ${e.requested.shape} · ${e.requested.style}*\n\n`;
+
+  out += heading('Difficulty');
+  out += line('Requested', `${e.requested.difficulty} (${e.requested.budget} XP budget)`);
+  out += line('Raw XP', e.xp.raw);
+  out += line('Action economy', `x${e.xp.multiplier} for ${e.members.length} enemies against ${e.party.size} characters`);
+  out += line('Adjusted XP', `${e.xp.adjusted} (${e.xp.drift > 0 ? '+' : ''}${e.xp.drift}% against budget)`);
+  out += line('Plays as', `${e.difficulty.label} — ${e.difficulty.ratio}x a standard encounter`);
+  out += line('XP award', `${e.xp.raw} total, ${e.xp.perCharacter} per character`);
+  out += '\n';
+
+  out += heading('Roster');
+  out += '| # | Enemy | CR | XP | AC | HP | Role |\n';
+  out += '| --- | --- | --- | --- | --- | --- | --- |\n';
+  for (const m of e.members) {
+    out += `| ${m.ordinal} | ${m.name} | ${m.challengeRating} | ${m.xp} | ${m.armorClass} | ${m.hitPoints} `
+      + `| ${m.tier === 'leader' ? 'leader' : m.creatureType}${m.spellcaster ? ', caster' : ''} |\n`;
+  }
+  out += '\n';
+
+  if (e.warnings.length) {
+    out += heading('Warnings');
+    for (const warning of e.warnings) out += bullet(warning);
+    out += '\n';
+  }
+  if (e.notes.length) {
+    out += heading('Notes');
+    for (const note of e.notes) out += bullet(note);
+    out += '\n';
+  }
+
+  out += heading('How this was built');
+  out += bullet(`Seed \`${e.seed}\`, generator ${e.generation.generatorVersion}, `
+    + `${e.generation.contentPacks.map((p) => `${p.id} ${p.version}`).join(', ')}.`);
+  out += bullet('Budget derived from the SRD XP ladder: a standard encounter for four characters of '
+    + 'level L is one creature of CR L. Difficulty and party size scale that; the number of enemies '
+    + 'scales it again through the action economy multiplier.');
+  out += bullet('Every stat block below was produced by the ordinary creature generator and carries its '
+    + 'own independent validation.');
+  out += '\n';
+
+  for (const entry of sheets) {
+    const sheet = entry.sheet || entry;
+    if (!sheet || sheet.kind !== 'creature') continue;
+    out += '---\n\n';
+    out += creatureMarkdown(sheet);
+  }
+
+  return out;
+}
+
 const ordinal = (n) => (n === 0 ? 'cantrip' : `${n}${['th', 'st', 'nd', 'rd'][n % 10 > 3 || (n % 100 - n % 10 === 10) ? 0 : n % 10]}`);
 
 export { ordinal };

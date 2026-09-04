@@ -8,16 +8,18 @@ fill a gap.
 A static site: no build step, no dependencies, no server. Push it to GitHub
 Pages and it works.
 
-Two outputs, deliberately built on different rules models:
+Three tabs, built on deliberately different models:
 
 - **NPC characters** are built with player-character creation and progression
   rules — a real class, a real level, real choices at every level-up.
 - **Enemy creatures** are built with the creature/stat-block model. Monsters are
   never forced through character rules.
+- **Enemy groups** answer a different question again — not "what is this
+  creature" but "what should this party be fighting". You give it a party level
+  and size; it budgets a whole encounter, decides the roster, and generates
+  every stat block in it.
 
-Encounter building, quests, maps, initiative and combat simulation are out of
-scope. This tool answers "what is this entity, exactly?" — something else
-decides which entities exist.
+Quests, maps, initiative and combat simulation remain out of scope.
 
 ## Running it
 
@@ -31,6 +33,27 @@ python3 -m http.server 8792
 
 On GitHub Pages just push — Pages serves over HTTPS, which is all the modules
 need.
+
+## Groups, and the one-way dependency
+
+The group tab is the only part of this project that decides *which* entities
+exist rather than what one entity is. That is a genuinely different job, so it
+lives in its own layer, `src/encounter/`, on top of the sheet generators rather
+than inside them:
+
+```
+encounter/  budget -> composition -> cast -> per-slot creature requests
+                                              |
+sheets/     <-------------------------------- generateCreature (unchanged)
+```
+
+Nothing under `sheets/`, `rules/srd51/{abilities,progression,combat,challenge}`
+or `content/` imports the encounter layer, and nothing there knows an encounter
+exists. Every enemy on a roster is an ordinary `CreatureSheet` from
+`generateCreature`, carrying its own independent validation — the group tab
+cannot produce a stat block the Enemy Creature tab could not. An external
+encounter builder can still ignore all of this and call `generateCreature`
+directly, which is the property the boundary was drawn to protect.
 
 ## The one architectural rule
 
@@ -184,6 +207,53 @@ comes from a trait the model does not score. Every evaluation carries its
 assumptions with it, and existing creatures always keep their printed CR — the
 evaluation is shown in the Inspector as information, never as authority.
 
+## The encounter model, and how far to trust it
+
+The SRD publishes XP by challenge rating and nothing else about building an
+encounter — no party thresholds, no multiplier table. So, exactly like the CR
+model, this is an explicit **project-defined** model. Unlike the CR model it is
+*derived* rather than calibrated, from one anchoring claim:
+
+> A standard encounter for four characters of level L is one creature of CR L.
+
+That gives a per-character share of `xpForCR(L) / 4`, and everything else is a
+multiplier on it. `node tools/verify.mjs encounters` re-derives the whole table
+and asserts the anchor still holds at every level from 1 to 20.
+
+Two scalings are at work and are deliberately kept apart:
+
+| | scales with | why |
+| --- | --- | --- |
+| **budget** | party level, party size, difficulty | how much the party can take |
+| **multiplier** | number of enemies | how much the same XP hurts split across more turns |
+
+The multiplier is `1 + 0.5 × partyFactor × log₂(enemies)`, capped at 4 —
+smooth where a banded table jumps, and bent by party size because a larger
+party has more turns of its own to answer with. Six goblins and one ogre can
+carry identical raw XP and be nothing alike at the table; conflating these two
+is the classic way to get encounter maths wrong.
+
+Two nudges move the group without moving the budget:
+
+- **Numbers** trades enemy count against enemy rating. At a fixed *hard* budget
+  for four level-5 characters, the dial spans ten CR 1/2 enemies to one CR 7 —
+  every step still rating as hard.
+- **Tactics** biases who fills each slot, from pure melee to caster-heavy. It is
+  a bias on a scored search, never a hard filter: where nothing at a slot's
+  rating fits, the group says so in a note rather than silently ignoring you or
+  failing.
+
+What the model measures is XP and turn count. It cannot see terrain, surprise,
+resource attrition, action denial, or how the party is actually built. Every
+generated group shows its full arithmetic on screen and in the Markdown export
+for exactly that reason — it is a starting point you overrule, and it is built
+to be argued with rather than believed.
+
+Difficulty is always measured from the ratings that actually came back, never
+from the ones that were requested. Where the enabled content cannot reach the
+difficulty asked for — a level-20 party against a bestiary that stops at CR 17 —
+you get the closest honest group and a warning saying so.
+
 ## Content and licensing
 
 Two packs, kept deliberately separate so it is always clear which is which:
@@ -216,7 +286,7 @@ index.html  style.css
 src/
   core/       rng.js (namespaced streams)  ids.js (stable ids, canonical JSON)
               validation.js (issue collection)  version.js
-  rules/srd51/  abilities  proficiency  progression  combat  challenge
+  rules/srd51/  abilities  proficiency  progression  combat  challenge  encounter
   content/    schema.js  registry.js  packs/
   sheets/
     character/  spec  build-planner  ability-builder  class-builder
@@ -225,16 +295,19 @@ src/
     creature/   spec  normalizer  cr-evaluator  variant-builder
                 generated-builder  generator  validator
     narrative/  personality.js
+  encounter/  spec  composer  casting  generator  validator
   export/     json.js  markdown.js
-  api.js      generateCharacter · generateCreature · generateSheets · reroll
-  ui/         app  controls  sheetview  inspector
+  api.js      generateCharacter · generateCreature · generateEncounter
+              generateSheets · reroll
+  ui/         app  controls  sheetview  groupview  inspector
 tools/
   verify.mjs  fixtures/golden.json
 ```
 
 The rules layer knows nothing about generation; the generators know nothing
 about the UI; the validators import no builder. Content is data, and the
-registry is the only thing that reads a pack file.
+registry is the only thing that reads a pack file. The encounter layer sits on
+top of the sheet generators and is imported by nothing below it.
 
 ## API
 
@@ -250,6 +323,15 @@ const enemy = generateCreature({
   targetCR: 3, family: 'undead', environment: 'crypt',
 });
 
+const ambush = generateEncounter({
+  seed: 'crypt-77', partyLevel: 5, partySize: 4, difficulty: 'hard',
+  shape: -2,          // -2 horde ... +2 solo, at the same budget
+  style: 1,           // -2 all melee ... +2 caster-heavy
+  environment: 'crypt',
+});
+// ambush.encounter  the roster, the budget arithmetic, notes and warnings
+// ambush.sheets     one full CreatureSheet per member
+
 const party = generateSheets([
   { kind: 'character', label: 'captain', spec: { level: 5, role: 'warrior' } },
   { kind: 'character', label: 'guard', count: 4, spec: { level: 2, role: 'guardian', named: false } },
@@ -260,6 +342,11 @@ const party = generateSheets([
 Each batch entity gets a deterministic child seed, so re-requesting one alone
 reproduces it exactly. Anonymous group members are numbered from the group's
 label — `Guard 1`, `Guard 2`, `Guard 3`.
+
+`generateEncounter` returns `{ok: true, encounter, sheets, validation,
+inspector}`. The encounter carries its own independent validation, which
+recomputes the whole difficulty calculation from the sheets rather than trusting
+the composer that produced them.
 
 Results are `{ok: true, sheet, validation, inspector}` or `{ok: false, failure}`.
 
@@ -272,6 +359,7 @@ node tools/verify.mjs rng        # determinism and stream isolation
 node tools/verify.mjs rules      # rules-math invariants
 node tools/verify.mjs sheets     # generate and validate a broad sweep
 node tools/verify.mjs cr         # CR model drift against the bestiary
+node tools/verify.mjs encounters # encounter budget model and group composition
 node tools/verify.mjs seeds      # golden-seed regression (--update to rewrite)
 node tools/verify.mjs stats      # statistical generation over 1500 seeds
 ```
@@ -279,16 +367,20 @@ node tools/verify.mjs stats      # statistical generation over 1500 seeds
 The full run covers 477 content entities, every class at every level from 1 to
 20, all three ability methods and both hit point policies, all 68 bundled
 creatures normalised and checked for fidelity, 756 generated creatures across
-every type, role and rating, and 1500 statistical seeds — checking that every
-class, species, background and role is reachable, that none dominates, that
-every returned sheet has zero validation errors, and that the internal retry
-rate stays near zero.
+every type, role and rating, 720 encounters spanning every party level, party
+size, difficulty and shape nudge, and 1500 statistical seeds — checking that
+every class, species, background and role is reachable, that none dominates,
+that every returned sheet has zero validation errors, that every generated group
+passes independent validation and delivers the difficulty it was asked for, and
+that the internal retry rate stays near zero.
 
 ## Saving and loading
 
 JSON is canonical and lossless: schema version, spec, generation manifest, the
-complete sheet, the validation summary and the attribution. Loading a file shows
-the sheet **as stored** — it is a record of what was generated, not a request to
+complete sheet, the validation summary and the attribution. A saved group is the
+same envelope around the encounter plus every member's sheet, and reopens
+complete — roster, difficulty arithmetic and stat blocks. Loading a file shows
+what was stored **as stored** — a record of what was generated, not a request to
 generate it again. Regeneration from a stored spec is a separate, explicit
 operation, because a newer generator version may legitimately produce something
 different.

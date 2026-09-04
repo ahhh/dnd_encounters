@@ -238,3 +238,71 @@ pre.code {
   .workspace { flex-direction: column; }
   .side { width: auto; border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* --- nudge sliders --------------------------------------------------------- */
+
+.slider { display: flex; flex-direction: column; gap: 3px; }
+.slider input[type="range"] {
+  width: 100%; margin: 2px 0 0; accent-color: var(--accent);
+  background: transparent; cursor: pointer;
+}
+.sliderlabel {
+  font-family: var(--mono); font-size: 11px; color: var(--accent-2);
+  letter-spacing: 0.01em;
+}
+
+/* The live XP budget readout under the party fields. */
+.budget {
+  background: var(--chrome-2); border: 1px solid var(--line); border-radius: 4px;
+  padding: 7px 11px; margin: -2px 0 12px;
+}
+.budget .k { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.budget .v { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--accent); }
+.budget .why { color: var(--dimmer); font-size: 10px; font-family: var(--mono); margin-top: 1px; }
+
+/* --- encounter summary ----------------------------------------------------- */
+
+.viewsep {
+  color: var(--dim); font-size: 11px; padding-left: 10px; margin-left: 6px;
+  border-left: 1px solid var(--line);
+}
+
+/* Budget bar. The marker sits at 80% of the track, so the bar is legible up to
+   125% of budget before it saturates -- exactly the range where the difference
+   between "on budget" and "over" still matters. */
+.budgetbar { margin: 10px 0 4px; max-width: 560px; }
+.budgetbar .track {
+  position: relative; height: 8px; border-radius: 4px;
+  background: var(--chrome-2); border: 1px solid var(--line); overflow: hidden;
+}
+.budgetbar .fill { height: 100%; background: var(--ok); transition: width 0.15s ease; }
+.budgetbar .fill.over { background: var(--err); }
+.budgetbar .fill.under { background: var(--accent-2); }
+.budgetbar .marker {
+  position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--ink); opacity: 0.7;
+}
+.budgetbar .legend {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-family: var(--mono); font-size: 11px; margin-top: 4px;
+}
+
+table.roster-table tr.leader td { background: rgba(200,150,62,0.06); }
+table.roster-table td:first-child { color: var(--dimmer); }
+
+button.linkish {
+  background: none; border: 0; padding: 0; font: inherit; font-weight: 600;
+  color: var(--accent-2); cursor: pointer; text-align: left;
+}
+button.linkish:hover { text-decoration: underline; background: none; border: 0; }
+
+.chip.dimchip { color: var(--dimmer); border-style: dashed; }
+
+.workings { margin: 0 0 10px; padding-left: 20px; color: var(--dim); font-size: 12px; }
+.workings li { margin-bottom: 5px; }
+.workings li::marker { color: var(--accent); font-family: var(--mono); }
+
+.rosteritem.summary { border-bottom: 1px solid var(--line-soft); border-radius: 3px; margin-bottom: 7px; }
+.rosteritem.leader .n::after {
+  content: 'leader'; float: right; font-size: 9px; font-weight: 400;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+}

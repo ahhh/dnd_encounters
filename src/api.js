@@ -1,18 +1,27 @@
 // Public API.
 //
 // The stable surface other tools call. The boundary the build plan draws is
-// enforced here: an encounter system decides *which* entities exist and how
-// many; this project decides what each one's complete, valid sheet is. There is
-// no encounter concept anywhere below this line, and nothing here reaches
-// upward for one.
+// enforced here, and it is a boundary rather than an omission: an encounter
+// system decides *which* entities exist and how many; this project decides what
+// each one's complete, valid sheet is.
+//
+// The group generator lives on the encounter side of that line, in
+// `src/encounter/`. It is a consumer of the sheet generators like any external
+// tool would be -- it composes a roster against a difficulty budget and then
+// asks `generateCreature` for each member's sheet. Nothing under `sheets/`,
+// `rules/` or `content/` imports it, and nothing under those directories knows
+// an encounter exists. An external encounter builder can still ignore it
+// entirely and call `generateCreature` directly, which is the property the
+// boundary was drawn to preserve.
 
 import { buildRegistry, DEFAULT_PACK_IDS } from './content/packs/index.js';
 import { createSeedContext, applyReroll, REROLL_SCOPES } from './core/rng.js';
 import { GENERATOR_VERSION, SCHEMA_VERSION } from './core/version.js';
 import { generateCharacter as generateCharacterSheet } from './sheets/character/generator.js';
 import { generateCreature as generateCreatureSheet } from './sheets/creature/generator.js';
-import { buildDocument, importDocument, serializeDocument } from './export/json.js';
-import { characterMarkdown, creatureMarkdown } from './export/markdown.js';
+import { generateEncounter as generateEncounterGroup } from './encounter/generator.js';
+import { buildDocument, buildEncounterDocument, importDocument, serializeDocument } from './export/json.js';
+import { characterMarkdown, creatureMarkdown, encounterMarkdown } from './export/markdown.js';
 
 let sharedRegistry = null;
 
@@ -28,6 +37,19 @@ export const generateCharacter = (spec, options = {}) =>
 
 export const generateCreature = (spec, options = {}) =>
   generateCreatureSheet(spec, options.registry || getRegistry(spec.contentPacks), options);
+
+/**
+ * Encounter generation: the layer that decides *which* enemies exist and how
+ * many, for a given party.
+ *
+ * This is the one entry point that sits above the sheet generators rather than
+ * beside them. It composes a group against a difficulty budget and then calls
+ * `generateCreature` once per member, so it can never produce a sheet the Enemy
+ * Creature tab could not have produced on its own. Nothing below this line
+ * knows an encounter exists -- the dependency runs strictly one way.
+ */
+export const generateEncounter = (spec, options = {}) =>
+  generateEncounterGroup(spec, options.registry || getRegistry(spec.contentPacks), options);
 
 /**
  * Batch generation. Each request gets a deterministic child seed derived from
@@ -128,9 +150,14 @@ export const toMarkdown = (sheet) =>
 export const toDocument = (result, registry) => buildDocument(result, registry || getRegistry());
 export const toJSON = (result, registry) => serializeDocument(toDocument(result, registry));
 
+export const toEncounterDocument = (result, registry) =>
+  buildEncounterDocument(result, registry || getRegistry());
+export const toEncounterJSON = (result, registry) =>
+  serializeDocument(toEncounterDocument(result, registry));
+
 export {
-  importDocument, serializeDocument, buildDocument,
-  characterMarkdown, creatureMarkdown,
+  importDocument, serializeDocument, buildDocument, buildEncounterDocument,
+  characterMarkdown, creatureMarkdown, encounterMarkdown,
   REROLL_SCOPES, DEFAULT_PACK_IDS, GENERATOR_VERSION, SCHEMA_VERSION,
 };
 

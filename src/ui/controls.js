@@ -7,6 +7,8 @@
 
 import { CHARACTER_ROLES, ABILITY_METHODS, HP_POLICIES } from '../sheets/character/spec.js';
 import { CREATURE_ROLES, CREATURE_MODES } from '../sheets/creature/spec.js';
+import { SHAPE_STEPS, STYLE_STEPS, MAX_PARTY_SIZE, MAX_ENEMIES } from '../encounter/spec.js';
+import { DIFFICULTIES, partyBudget, standardShare } from '../rules/srd51/encounter.js';
 import { CR_LADDER, formatCR } from '../rules/srd51/proficiency.js';
 
 const el = (tag, className, text) => {
@@ -19,7 +21,10 @@ const el = (tag, className, text) => {
 function field(label, control, hint) {
   const wrap = el('div', 'field');
   const lab = el('label', null, label);
-  lab.setAttribute('for', control.id);
+  // A control may be a bare input or a wrapper around one (a slider carries its
+  // own caption); label the input either way rather than pointing at a div.
+  const target = control.id ? control : control.querySelector('input, select');
+  if (target?.id) lab.setAttribute('for', target.id);
   wrap.append(lab, control);
   if (hint) wrap.append(el('div', 'hint', hint));
   return wrap;
@@ -45,6 +50,29 @@ function number(id, value, min, max) {
   node.min = min;
   node.max = max;
   return node;
+}
+
+/**
+ * A nudge. Rendered as a slider rather than a select because it is a bias on a
+ * continuum, not a choice between alternatives -- the labels underneath say
+ * what each detent means so the dial is still readable without dragging it.
+ */
+function slider(id, steps, value, onInput) {
+  const wrap = el('div', 'slider');
+  const input = el('input');
+  input.type = 'range';
+  input.id = id;
+  input.min = String(steps[0].value);
+  input.max = String(steps[steps.length - 1].value);
+  input.step = '1';
+  input.value = String(value);
+  const caption = el('div', 'sliderlabel', (steps.find((s) => s.value === Number(value)) || steps[0]).label);
+  input.addEventListener('input', () => {
+    caption.textContent = (steps.find((s) => s.value === Number(input.value)) || steps[0]).label;
+    if (onInput) onInput();
+  });
+  wrap.append(input, caption);
+  return wrap;
 }
 
 function text(id, value, placeholder) {
@@ -84,6 +112,7 @@ export function createControls(root, { registry, state, onChange }) {
   function render() {
     root.replaceChildren();
     if (state.kind === 'character') renderCharacter();
+    else if (state.kind === 'group') renderGroup();
     else renderCreature();
     for (const input of root.querySelectorAll('input, select')) {
       input.addEventListener('change', onChange);
@@ -193,12 +222,100 @@ export function createControls(root, { registry, state, onChange }) {
     root.append(checkbox('withPersonality', 'Roll disposition and tactics', s.withPersonality));
   }
 
+  /**
+   * The group form. Its top half describes the *party*, not the enemies: this
+   * tab answers "what should these characters be fighting", so the party is the
+   * input and the roster is the output.
+   */
+  function renderGroup() {
+    const s = state.group;
+
+    root.append(titled('The party'));
+    root.append(field('Character level', number('partyLevel', s.partyLevel, 1, 20)));
+    root.append(field('Party size', number('partySize', s.partySize, 1, MAX_PARTY_SIZE)));
+    root.append(field('Difficulty', select('difficulty',
+      DIFFICULTIES.map((d) => ({ value: d, label: titleCase(d) })), s.difficulty)));
+
+    const live = el('div', 'budget');
+    root.append(live);
+    const refreshBudget = () => {
+      const level = Number(root.querySelector('#partyLevel')?.value) || 1;
+      const size = Number(root.querySelector('#partySize')?.value) || 1;
+      const difficulty = root.querySelector('#difficulty')?.value || 'standard';
+      const budget = partyBudget({ partyLevel: level, partySize: size, difficulty });
+      live.replaceChildren();
+      live.append(el('div', 'k', 'XP budget'));
+      live.append(el('div', 'v', String(budget)));
+      live.append(el('div', 'why',
+        `${Math.round(standardShare(level))} per character x ${size} x ${difficulty}`));
+    };
+    refreshBudget();
+    // Both events: `input` keeps the readout live while a number is typed, and
+    // `change` catches a select and a committed spinner value.
+    for (const id of ['partyLevel', 'partySize', 'difficulty']) {
+      const control = root.querySelector(`#${id}`);
+      control?.addEventListener('input', refreshBudget);
+      control?.addEventListener('change', refreshBudget);
+    }
+
+    root.append(titled('Shape of the fight'));
+    root.append(field('Numbers', slider('shape', SHAPE_STEPS, s.shape),
+      'Same budget either way: many weak enemies, or one strong one. More enemies means more turns, so each one has to be worth less.'));
+    root.append(field('Tactics', slider('style', STYLE_STEPS, s.style),
+      'Biases who gets picked for each slot. Ignored where nothing at that rating fits, with a note.'));
+
+    root.append(titled('Flavour'));
+    root.append(field('Mode', select('gmode', [
+      { value: 'existing', label: 'Existing — real SRD creatures' },
+      { value: 'variant', label: 'Variant — documented transforms' },
+      { value: 'generated', label: 'Generated — original mechanics' },
+    ].filter((o) => CREATURE_MODES.includes(o.value)), s.mode)));
+    root.append(field('Creature type', select('gtype', [
+      { value: 'any', label: 'Any' },
+      ...[...new Set(registry.all('monster').map((m) => m.creatureType))].sort()
+        .map((t) => ({ value: t, label: t })),
+    ], s.creatureType)));
+    root.append(field('Family', select('gfamily', [
+      { value: 'any', label: 'Any' },
+      ...collect(registry, 'monster', 'families').map((f) => ({ value: f, label: f })),
+    ], s.family)));
+    root.append(field('Environment', select('genvironment', [
+      { value: 'any', label: 'Any' },
+      ...collect(registry, 'monster', 'environments').map((e) => ({ value: e, label: e })),
+    ], s.environment)));
+    root.append(field('Theme', text('gtheme', s.theme, 'e.g. crypt guardians')));
+
+    root.append(titled('Composition'));
+    root.append(field('Enemy cap', number('maxEnemies', s.maxEnemies, 1, MAX_ENEMIES),
+      'A hard ceiling on the roster, however cheap the enemies get.'));
+    root.append(checkbox('mixedTiers', 'Allow a leader and a line', s.mixedTiers));
+    root.append(checkbox('cohesion', 'Keep the group to one family', s.cohesion));
+    root.append(checkbox('gpersonality', 'Roll disposition and tactics', s.withPersonality));
+  }
+
   /** Reads the current form back into the state object it came from. */
   function read() {
     const value = (id) => root.querySelector(`#${id}`)?.value;
     const checked = (id) => !!root.querySelector(`#${id}`)?.checked;
 
-    if (state.kind === 'character') {
+    if (state.kind === 'group') {
+      Object.assign(state.group, {
+        partyLevel: Number(value('partyLevel')) || 1,
+        partySize: Number(value('partySize')) || 1,
+        difficulty: value('difficulty'),
+        shape: Number(value('shape')) || 0,
+        style: Number(value('style')) || 0,
+        mode: value('gmode'),
+        creatureType: value('gtype'),
+        family: value('gfamily'),
+        environment: value('genvironment'),
+        theme: value('gtheme') || '',
+        maxEnemies: Number(value('maxEnemies')) || MAX_ENEMIES,
+        mixedTiers: checked('mixedTiers'),
+        cohesion: checked('cohesion'),
+        withPersonality: checked('gpersonality'),
+      });
+    } else if (state.kind === 'character') {
       Object.assign(state.character, {
         level: Number(value('level')) || 1,
         role: value('role'),
@@ -235,6 +352,7 @@ export function createControls(root, { registry, state, onChange }) {
 }
 
 const refOption = (entry) => ({ value: entry.slug, label: entry.name });
+const titleCase = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 /** Turns the form's tri-state selects into the spec's `true | false | null`. */
 export const triState = (value) => (value === 'yes' ? true : value === 'no' ? false : null);
@@ -259,6 +377,26 @@ export function toCharacterSpec(seed, s) {
       requiredSkills: s.requiredSkill ? [s.requiredSkill] : [],
       requiredLanguages: [],
     },
+  };
+}
+
+export function toGroupSpec(seed, s) {
+  return {
+    seed,
+    partyLevel: s.partyLevel,
+    partySize: s.partySize,
+    difficulty: s.difficulty,
+    shape: s.shape,
+    style: s.style,
+    mode: s.mode,
+    creatureType: s.creatureType === 'any' ? null : s.creatureType,
+    family: s.family === 'any' ? null : s.family,
+    environment: s.environment === 'any' ? null : s.environment,
+    theme: s.theme,
+    maxEnemies: s.maxEnemies,
+    mixedTiers: s.mixedTiers,
+    cohesion: s.cohesion,
+    withPersonality: s.withPersonality,
   };
 }
 

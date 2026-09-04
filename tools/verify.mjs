@@ -7,6 +7,7 @@
 //   node tools/verify.mjs rules      rules-math invariants
 //   node tools/verify.mjs sheets     generate and validate a broad sweep
 //   node tools/verify.mjs cr         CR model drift against the bundled bestiary
+//   node tools/verify.mjs encounters  encounter budget model and group composition
 //   node tools/verify.mjs seeds      golden-seed regression (--update to rewrite)
 //   node tools/verify.mjs stats      statistical generation over many seeds
 //
@@ -27,7 +28,13 @@ import { generateCreature } from '../src/sheets/creature/generator.js';
 import { CHARACTER_ROLES } from '../src/sheets/character/spec.js';
 import { CREATURE_ROLES } from '../src/sheets/creature/spec.js';
 import { crDrift } from '../src/sheets/creature/cr-evaluator.js';
-import { toMarkdown, toJSON } from '../src/api.js';
+import {
+  partyBudget, groupMultiplier, standardShare, difficultyOf, encounterXP, DIFFICULTIES,
+} from '../src/rules/srd51/encounter.js';
+import { generateEncounter } from '../src/encounter/generator.js';
+import { validateEncounter } from '../src/encounter/validator.js';
+import { SHAPE_STEPS } from '../src/encounter/spec.js';
+import { toMarkdown, toJSON, toEncounterJSON, encounterMarkdown } from '../src/api.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_PATH = join(HERE, 'fixtures', 'golden.json');
@@ -321,15 +328,33 @@ const GOLDEN_SPECS = [
   { name: 'goblin-fixed', kind: 'creature', spec: { seed: 'gob-1', mode: 'existing', baseCreature: 'goblin' } },
   { name: 'variant-5', kind: 'creature', spec: { seed: 'warped-5', mode: 'variant', targetCR: 5, family: 'undead' } },
   { name: 'generated-5', kind: 'creature', spec: { seed: 'ashen-eye-1209', mode: 'generated', targetCR: 5, creatureType: 'undead', role: 'controller' } },
+  { name: 'group-horde-5', kind: 'encounter', spec: { seed: 'ember-raven-4172', partyLevel: 5, partySize: 4, difficulty: 'hard', shape: -2 } },
+  { name: 'group-solo-12', kind: 'encounter', spec: { seed: 'kiln-oath-9001', partyLevel: 12, partySize: 5, difficulty: 'deadly', shape: 2 } },
 ];
 
 function currentGolden() {
   const out = {};
   for (const entry of GOLDEN_SPECS) {
-    const result = entry.kind === 'creature'
-      ? generateCreature(entry.spec, registry)
-      : generateCharacter(entry.spec, registry);
+    const result = entry.kind === 'encounter'
+      ? generateEncounter(entry.spec, registry)
+      : entry.kind === 'creature'
+        ? generateCreature(entry.spec, registry)
+        : generateCharacter(entry.spec, registry);
     if (!result.ok) { out[entry.name] = { error: result.failure.code }; continue; }
+    if (entry.kind === 'encounter') {
+      // A group is pinned by its whole composition, not by one sheet: the
+      // fingerprint covers the roster and the difficulty arithmetic together,
+      // which is what would catch a change to the composer that left every
+      // individual stat block untouched.
+      out[entry.name] = {
+        fingerprint: fingerprint(result.encounter),
+        name: result.encounter.composition.summary,
+        summary: `${result.encounter.members.length} `
+          + `${result.encounter.members.length === 1 ? 'enemy' : 'enemies'}, ${result.encounter.difficulty.label}, `
+          + `${result.encounter.xp.adjusted}/${result.encounter.xp.budget} XP`,
+      };
+      continue;
+    }
     out[entry.name] = {
       fingerprint: fingerprint(result.sheet),
       name: result.sheet.identity.name,
@@ -428,12 +453,162 @@ function verifyStats(count = 1500) {
   assert(Object.keys(crs).length >= 10, `unconstrained requests reach ${Object.keys(crs).length} distinct challenge ratings`);
 }
 
+// --- encounters ------------------------------------------------------------------
+
+function verifyEncounters() {
+  section('Encounter model');
+
+  // The budget is derived, so its shape is a property to check rather than a
+  // table to trust: it must rise with every input that should make a fight
+  // harder, and with none that should not.
+  let monotonic = true;
+  for (let level = 2; level <= 20; level++) {
+    if (standardShare(level) <= standardShare(level - 1)) monotonic = false;
+  }
+  assert(monotonic, 'the per-character budget rises with every character level');
+
+  let sizeMonotonic = true;
+  let difficultyMonotonic = true;
+  for (let level = 1; level <= 20; level++) {
+    for (let size = 2; size <= 8; size++) {
+      if (partyBudget({ partyLevel: level, partySize: size })
+        <= partyBudget({ partyLevel: level, partySize: size - 1 })) sizeMonotonic = false;
+    }
+    let previous = 0;
+    for (const difficulty of DIFFICULTIES) {
+      const budget = partyBudget({ partyLevel: level, partySize: 4, difficulty });
+      if (budget <= previous) difficultyMonotonic = false;
+      previous = budget;
+    }
+  }
+  assert(sizeMonotonic, 'the budget rises with party size at every level');
+  assert(difficultyMonotonic, 'light < standard < hard < deadly at every level');
+
+  // The action economy multiplier: strictly rising, bounded, and 1 for a solo.
+  let multiplierOK = groupMultiplier(1, 4) === 1;
+  for (let n = 2; n <= 16; n++) {
+    const m = groupMultiplier(n, 4);
+    if (m <= groupMultiplier(n - 1, 4) || m > 4) multiplierOK = false;
+  }
+  assert(multiplierOK, 'the action economy multiplier is 1 for a solo, rises with count, and stays <= 4');
+  assert(groupMultiplier(6, 6) < groupMultiplier(6, 3),
+    'the same six enemies are worth less against a bigger party');
+
+  // A standard encounter for four characters of level L should be about one
+  // creature of CR L -- the claim the whole model is derived from. Checking it
+  // here is what stops the derivation from quietly drifting.
+  let anchorOK = true;
+  for (let level = 1; level <= 20; level++) {
+    const solo = encounterXP([level], 4);
+    const d = difficultyOf(solo.adjusted, { partyLevel: level, partySize: 4 });
+    if (d.label !== 'standard') anchorOK = false;
+  }
+  assert(anchorOK, 'one creature of CR L rates as a standard encounter for four characters of level L');
+
+  // --- generation sweep ----------------------------------------------------------
+
+  let produced = 0;
+  let invalid = 0;
+  let failed = 0;
+  let onTarget = 0;
+  let attempts = 0;
+  const failures = [];
+
+  for (let level = 1; level <= 20; level += 1) {
+    for (const size of [3, 4, 5]) {
+      for (const difficulty of DIFFICULTIES) {
+        for (const shape of [-2, 0, 2]) {
+          attempts++;
+          const seed = `sweep-${level}-${size}-${difficulty}-${shape}`;
+          const result = generateEncounter({
+            seed, partyLevel: level, partySize: size, difficulty, shape,
+          }, registry);
+          if (!result.ok) {
+            failed++;
+            if (failures.length < 3) failures.push(`${seed}: ${result.failure.message}`);
+            continue;
+          }
+          produced++;
+          // Re-run the validator here rather than trusting the one the
+          // generator already ran: a generator that skipped validation would
+          // otherwise pass this sweep silently.
+          const validation = validateEncounter(result.encounter, result.sheets);
+          if (!validation.valid) {
+            invalid++;
+            if (failures.length < 3) failures.push(`${seed}: ${validation.errors[0].message}`);
+          }
+          if (result.encounter.difficulty.label === difficulty) onTarget++;
+        }
+      }
+    }
+  }
+
+  assert(failed === 0, `every party/difficulty/shape combination produces a group (${attempts} requests)`,
+    failures.join('\n'));
+  assert(invalid === 0, `every produced group passes independent validation (${produced} groups)`,
+    failures.join('\n'));
+
+  const hitRate = onTarget / Math.max(1, produced);
+  console.log(`  Requested difficulty delivered: ${(hitRate * 100).toFixed(1)}% of ${produced} groups`);
+  assert(hitRate > 0.75,
+    `the requested difficulty is delivered in most cases (${(hitRate * 100).toFixed(1)}%)`);
+
+  // --- the shape dial ------------------------------------------------------------
+
+  // The nudge has to actually move something, at a fixed budget: this is the
+  // check that would catch a composer that quietly ignored it.
+  let dialOK = true;
+  const counts = [];
+  for (const step of SHAPE_STEPS) {
+    const result = generateEncounter({
+      seed: 'dial-check', partyLevel: 8, partySize: 4, difficulty: 'hard', shape: step.value,
+    }, registry);
+    if (!result.ok) { dialOK = false; break; }
+    counts.push(result.encounter.members.length);
+  }
+  for (let i = 1; i < counts.length; i++) {
+    if (counts[i] > counts[i - 1]) dialOK = false;   // horde -> solo must not grow
+  }
+  console.log(`  Enemy count across the shape dial (horde to solo): ${counts.join(' -> ')}`);
+  assert(dialOK && counts[0] > counts[counts.length - 1],
+    'the shape nudge trades enemy count against enemy rating at a fixed budget');
+
+  // The style dial must reach spellcasters where the content has them.
+  const casters = generateEncounter({
+    seed: 'style-check', partyLevel: 9, partySize: 4, difficulty: 'hard', style: 2,
+  }, registry);
+  assert(casters.ok && casters.encounter.members.some((m) => m.spellcaster),
+    'the caster nudge puts at least one spellcaster in the group');
+
+  // --- determinism ---------------------------------------------------------------
+
+  const spec = {
+    seed: 'ember-raven-4172', partyLevel: 6, partySize: 4,
+    difficulty: 'hard', shape: -1, style: 1, environment: 'crypt',
+  };
+  const first = generateEncounter(spec, registry);
+  const second = generateEncounter(spec, registry);
+  assert(first.ok && second.ok && toEncounterJSON(first, registry) === toEncounterJSON(second, registry),
+    'the same seed and spec reproduce a byte-identical group');
+  assert(first.ok && toEncounterJSON(first, registry)
+    !== toEncounterJSON(generateEncounter({ ...spec, seed: 'other-seed' }, registry), registry),
+    'a different seed produces a different group');
+
+  // Every member is a sheet the Enemy Creature tab could have produced alone.
+  const memberErrors = first.sheets.filter((entry) => !entry.validation?.valid).length;
+  assert(memberErrors === 0, `every member of a group carries its own clean validation (${first.sheets.length} sheets)`);
+
+  const markdown = encounterMarkdown(first.encounter, first.sheets);
+  assert(markdown.includes('## Roster') && first.sheets.every((e) => markdown.includes(e.sheet.identity.name)),
+    'the Markdown export contains the roster and every member');
+}
+
 // --- runner ----------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const update = args.includes('--update');
 const commands = args.filter((a) => !a.startsWith('--'));
-const run = commands.length ? commands : ['content', 'rng', 'rules', 'sheets', 'cr', 'seeds', 'stats'];
+const run = commands.length ? commands : ['content', 'rng', 'rules', 'sheets', 'cr', 'encounters', 'seeds', 'stats'];
 
 console.log(`\x1b[1mVerifying — ${registry.byId.size} content entities from ${registry.packs.map((p) => p.id).join(', ')}\x1b[0m`);
 for (const command of run) {
@@ -442,6 +617,7 @@ for (const command of run) {
   else if (command === 'rules') verifyRules();
   else if (command === 'sheets') verifySheets();
   else if (command === 'cr') verifyCR();
+  else if (command === 'encounters') verifyEncounters();
   else if (command === 'seeds') verifySeeds(update);
   else if (command === 'stats') verifyStats();
   else { console.log(`unknown command: ${command}`); failures++; }

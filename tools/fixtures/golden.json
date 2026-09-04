@@ -39,6 +39,16 @@
     "name": "Goblin",
     "summary": "Small humanoid CR 1/4"
   },
+  "group-horde-5": {
+    "fingerprint": "9f21c35f650ed439",
+    "name": "1x CR 1 + 8x CR 1/2",
+    "summary": "9 enemies, hard, 2580/2700 XP"
+  },
+  "group-solo-12": {
+    "fingerprint": "70a7207744a57521",
+    "name": "1x CR 17",
+    "summary": "1 enemy, hard, 18000/23625 XP"
+  },
   "scout-5": {
     "fingerprint": "32329bc344534243",
     "name": "Wren Emberly",

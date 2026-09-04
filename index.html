@@ -13,6 +13,7 @@
   <div class="group tabs" id="kindtabs">
     <button class="tab" data-kind="character" aria-pressed="true">NPC Character</button>
     <button class="tab" data-kind="creature" aria-pressed="false">Enemy Creature</button>
+    <button class="tab" data-kind="group" aria-pressed="false">Enemy Group</button>
   </div>
 
   <div class="group">
@@ -24,12 +25,6 @@
   <button id="generate" class="primary">Generate</button>
 
   <div class="spacer"></div>
-
-  <div class="group">
-    <label class="lbl" for="batchcount">Batch</label>
-    <input id="batchcount" class="num" type="number" min="1" max="24" value="4">
-    <button id="batch" class="ghost" title="Generate this many with derived seeds">Generate group</button>
-  </div>
 
   <div class="group">
     <button id="copymd" class="ghost" title="Copy the Markdown sheet">Copy MD</button>
@@ -48,6 +43,7 @@
       <button class="vtab" data-view="markdown" aria-pressed="false">Markdown</button>
       <button class="vtab" data-view="json" aria-pressed="false">JSON</button>
       <button class="vtab" data-view="inspector" aria-pressed="false">Inspector</button>
+      <span class="viewsep" id="groupcrumb" hidden></span>
       <span class="spacer"></span>
       <span class="rerolls" id="rerollbar"></span>
     </nav>
