@@ -109,6 +109,29 @@ matters most as the project grows.
 | `build` | species, class, background and everything after |
 | `everything` | all of them |
 
+### Permalinks
+
+Because that reproduction contract holds, a link is a complete description of a
+sheet — there is nothing to upload and no server to ask. **Copy link** puts one
+on the clipboard, and the address bar is kept in step with whatever is on
+screen, so copying the URL does the same thing.
+
+```
+https://encounters.dnd5e.lockboxx.org/#kind=group&seed=Ember+Raven&partyLevel=6
+  &partySize=5&difficulty=hard&shape=-1&style=1&family=undead
+  &environment=crypt&theme=a+flooded+barrow&gen=a55c030d
+```
+
+The link carries the seed, only the form fields that differ from their
+defaults, any reroll counters, and `gen` — a stamp over the generator and
+content-pack versions. Following it reproduces the encounter exactly, down to
+each enemy's stat block. A link whose stamp no longer matches still opens, with
+a note saying it may no longer produce what its author saw.
+
+A link beats autosaved state, so following one shows that encounter rather than
+whatever you were last looking at. Hand-edited, truncated and malformed hashes
+fall back to defaults rather than failing.
+
 ## Independent validation
 
 A sheet is not finished until a validator that shares no code with the builder
@@ -299,7 +322,7 @@ src/
   export/     json.js  markdown.js
   api.js      generateCharacter · generateCreature · generateEncounter
               generateSheets · reroll
-  ui/         app  controls  sheetview  groupview  inspector
+  ui/         app  controls  permalink  sheetview  groupview  inspector
 tools/
   verify.mjs  fixtures/golden.json
 ```
@@ -360,6 +383,7 @@ node tools/verify.mjs rules      # rules-math invariants
 node tools/verify.mjs sheets     # generate and validate a broad sweep
 node tools/verify.mjs cr         # CR model drift against the bestiary
 node tools/verify.mjs encounters # encounter budget model and group composition
+node tools/verify.mjs links      # permalink codec and link-to-sheet reproduction
 node tools/verify.mjs seeds      # golden-seed regression (--update to rewrite)
 node tools/verify.mjs stats      # statistical generation over 1500 seeds
 ```

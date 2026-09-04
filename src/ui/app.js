@@ -12,6 +12,7 @@ import {
 } from '../api.js';
 import { fingerprint } from '../core/ids.js';
 import { createControls, toCharacterSpec, toCreatureSpec, toGroupSpec } from './controls.js';
+import { decodeHash, defaultForm, encodeState, linkFor, versionStamp } from './permalink.js';
 import { renderCharacter, renderCreature, el } from './sheetview.js';
 import { renderEncounter, renderGroupRoster } from './groupview.js';
 import { renderInspector } from './inspector.js';
@@ -19,6 +20,7 @@ import { renderInspector } from './inspector.js';
 const $ = (id) => document.getElementById(id);
 const registry = getRegistry();
 const AUTOSAVE = 'sheetforge.state.v1';
+const STAMP = versionStamp(registry);
 
 const state = {
   kind: 'character',
@@ -29,27 +31,15 @@ const state = {
   rosterIndex: -1,
   encounter: null,
   groupResult: null,
-  character: {
-    level: 5, role: 'scout', theme: 'Forest Guide',
-    species: 'random', class: 'random', background: 'random',
-    abilityMethod: 'standard-array', hpPolicy: 'fixed',
-    spellcaster: 'any', rangePreference: 'any', requiredSkill: '', named: true,
-  },
-  creature: {
-    mode: 'existing', targetCR: '3', creatureType: 'any', family: 'undead',
-    environment: 'crypt', role: 'any', baseCreature: 'random',
-    spellcaster: 'any', flying: 'any', ranged: 'any',
-    theme: '', withPersonality: true,
-  },
-  group: {
-    partyLevel: 5, partySize: 4, difficulty: 'standard',
-    shape: 0, style: 0,
-    mode: 'existing', creatureType: 'any', family: 'any', environment: 'any',
-    theme: '', maxEnemies: 16, mixedTiers: true, cohesion: true, withPersonality: true,
-  },
+  // Reroll counters for the sheet on screen. Part of the reproduction
+  // contract, so they travel in the permalink alongside the spec.
+  rerolls: {},
+  character: defaultForm('character'),
+  creature: defaultForm('creature'),
+  group: defaultForm('group'),
 };
 
-restore();
+const bootWarning = restore();
 
 const controls = createControls($('side'), {
   registry, state, onChange: () => { controls.read(); persist(); },
@@ -69,15 +59,17 @@ function generate() {
   if (state.kind === 'group') { generateGroup(seed); return; }
 
   const spec = currentSpec(seed);
+  const options = { registry, rerolls: state.rerolls };
   const result = state.kind === 'character'
-    ? generateCharacter(spec, { registry })
-    : generateCreature(spec, { registry });
+    ? generateCharacter(spec, options)
+    : generateCreature(spec, options);
   state.encounter = null;
   state.roster = [];
   state.rosterIndex = -1;
   show(result);
   renderRoster();
   persist();
+  syncLink();
 }
 
 /**
@@ -87,6 +79,7 @@ function generate() {
  */
 function generateGroup(seed) {
   const result = generateEncounter(toGroupSpec(seed, state.group), { registry });
+  syncLink();
   if (!result.ok) {
     state.encounter = null;
     state.roster = [];
@@ -200,7 +193,12 @@ function renderRerollBar() {
     button.title = `Reroll ${scope}: bumps only the ${REROLL_SCOPES[scope].length} stream(s) it covers`;
     button.addEventListener('click', () => {
       const next = reroll(state.result.sheet, scope, { registry });
+      // The counters are what makes a rerolled sheet reproducible, so they go
+      // back into state and from there into the link. Without this a link
+      // copied after a reroll would quietly describe the pre-reroll sheet.
+      if (next.ok) state.rerolls = { ...next.sheet.generation.rerolls };
       show(next);
+      syncLink();
     });
     bar.append(button);
   }
@@ -354,15 +352,16 @@ function setStatus(result, message, encounter) {
 
 // --- toolbar ----------------------------------------------------------------------------
 
-$('generate').addEventListener('click', generate);
+$('generate').addEventListener('click', () => { state.rerolls = {}; generate(); });
 
 $('reseed').addEventListener('click', () => {
   $('seed').value = randomSeed();
+  state.rerolls = {};
   generate();
 });
 
 $('seed').addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') generate();
+  if (event.key === 'Enter') { state.rerolls = {}; generate(); }
 });
 
 for (const tab of $('kindtabs').querySelectorAll('.tab')) {
@@ -371,6 +370,9 @@ for (const tab of $('kindtabs').querySelectorAll('.tab')) {
     for (const other of $('kindtabs').querySelectorAll('.tab')) {
       other.setAttribute('aria-pressed', String(other === tab));
     }
+    // Reroll counters are namespaced per kind; carrying them across a tab
+    // switch would apply an NPC's counters to an enemy's streams.
+    state.rerolls = {};
     controls.render();
     persist();
     generate();
@@ -398,6 +400,16 @@ $('copymd').addEventListener('click', async () => {
     $('st-hint').textContent = 'Markdown copied to the clipboard.';
   } catch {
     $('st-hint').textContent = 'Clipboard blocked; use the Markdown tab and copy by hand.';
+  }
+});
+
+$('copylink').addEventListener('click', async () => {
+  const url = linkFor(currentLink());
+  try {
+    await navigator.clipboard.writeText(url);
+    $('st-hint').textContent = 'Link copied. It reproduces this exactly — seed, spec, rerolls and versions.';
+  } catch {
+    $('st-hint').textContent = `Clipboard blocked; the same link is in the address bar: ${url}`;
   }
 });
 
@@ -468,6 +480,66 @@ function randomSeed() {
   return `${pick()}-${pick()}-${Math.floor(Math.random() * 9000) + 1000}`;
 }
 
+// --- permalinks -------------------------------------------------------------------
+//
+// The address bar is kept in step with whatever is on screen, so the URL is
+// always a complete description of the current sheet and "copy the link" and
+// "copy the address bar" are the same act. Nothing is uploaded: the link holds
+// the seed, the non-default form fields and the reroll counters, and the
+// generator rebuilds the rest.
+
+/** The hash body describing what is on screen right now. */
+function currentLink() {
+  return encodeState({
+    kind: state.kind,
+    seed: $('seed').value.trim() || 'unseeded',
+    form: state[state.kind],
+    rerolls: state.rerolls,
+    stamp: STAMP,
+  });
+}
+
+/**
+ * `replaceState` rather than assigning to `location.hash`: it neither pushes a
+ * history entry for every Generate -- which would make Back walk through every
+ * sheet you had looked at -- nor fires the `hashchange` below.
+ */
+function syncLink() {
+  try {
+    history.replaceState(null, '', `#${currentLink()}`);
+  } catch { /* file:// or a sandboxed frame that blocks history */ }
+}
+
+/**
+ * Loads a decoded link into state. Returns a message to show once the sheet is
+ * on screen, or null. A link made by a different generator or content-pack
+ * version still opens -- it may simply no longer produce what its author saw,
+ * which is worth saying rather than hiding.
+ */
+function applyLink(link) {
+  state.kind = link.kind;
+  Object.assign(state[link.kind], link.form);
+  state.rerolls = link.rerolls;
+  $('seed').value = link.seed;
+  return link.stamp && link.stamp !== STAMP
+    ? 'This link was made with a different generator or content version; what it produces now may differ from what was shared.'
+    : null;
+}
+
+// A link pasted into an already-open tab. Our own updates go through
+// `replaceState`, so anything arriving here came from outside.
+window.addEventListener('hashchange', () => {
+  const link = decodeHash(location.hash);
+  if (!link || location.hash.replace(/^#/, '') === currentLink()) return;
+  const warning = applyLink(link);
+  for (const tab of $('kindtabs').querySelectorAll('.tab')) {
+    tab.setAttribute('aria-pressed', String(tab.dataset.kind === state.kind));
+  }
+  controls.render();
+  generate();
+  if (warning) $('st-hint').textContent = warning;
+});
+
 // --- persistence -----------------------------------------------------------------------
 
 function persist() {
@@ -479,17 +551,27 @@ function persist() {
   } catch { /* private browsing, quota, or a browser that blocks storage */ }
 }
 
+/**
+ * A link beats stored state: someone who followed one asked for that encounter,
+ * not for whatever they were last looking at in this browser.
+ */
 function restore() {
+  const link = decodeHash(location.hash);
+  if (link) return applyLink(link);
+
   try {
     const saved = JSON.parse(localStorage.getItem(AUTOSAVE) || 'null');
-    if (!saved) return;
+    if (!saved) return null;
     if (saved.kind) state.kind = saved.kind;
     if (saved.view) state.view = saved.view;
     Object.assign(state.character, saved.character || {});
     Object.assign(state.creature, saved.creature || {});
     Object.assign(state.group, saved.group || {});
-    if (saved.seed) queueMicrotask(() => { $('seed').value = saved.seed; });
+    // Set synchronously: the opening `generate()` reads this input, so a
+    // deferred write would generate one seed and display another.
+    if (saved.seed) $('seed').value = saved.seed;
   } catch { /* ignore unreadable stored state */ }
+  return null;
 }
 
 // --- start ------------------------------------------------------------------------------
@@ -502,3 +584,4 @@ for (const tab of $('viewtabs').querySelectorAll('.vtab')) {
 }
 controls.render();
 generate();
+if (bootWarning) $('st-hint').textContent = bootWarning;

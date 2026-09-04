@@ -8,6 +8,7 @@
 //   node tools/verify.mjs sheets     generate and validate a broad sweep
 //   node tools/verify.mjs cr         CR model drift against the bundled bestiary
 //   node tools/verify.mjs encounters  encounter budget model and group composition
+//   node tools/verify.mjs links      permalink codec and link-to-sheet reproduction
 //   node tools/verify.mjs seeds      golden-seed regression (--update to rewrite)
 //   node tools/verify.mjs stats      statistical generation over many seeds
 //
@@ -34,6 +35,8 @@ import {
 import { generateEncounter } from '../src/encounter/generator.js';
 import { validateEncounter } from '../src/encounter/validator.js';
 import { SHAPE_STEPS } from '../src/encounter/spec.js';
+import { DEFAULT_FORMS, decodeHash, defaultForm, encodeState, versionStamp } from '../src/ui/permalink.js';
+import { toCharacterSpec, toCreatureSpec, toGroupSpec } from '../src/ui/controls.js';
 import { toMarkdown, toJSON, toEncounterJSON, encounterMarkdown } from '../src/api.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -608,7 +611,148 @@ function verifyEncounters() {
 const args = process.argv.slice(2);
 const update = args.includes('--update');
 const commands = args.filter((a) => !a.startsWith('--'));
-const run = commands.length ? commands : ['content', 'rng', 'rules', 'sheets', 'cr', 'encounters', 'seeds', 'stats'];
+// --- permalinks -------------------------------------------------------------------
+
+/**
+ * A permalink is a claim about reproduction: follow it and you get the sheet
+ * its author was looking at. That claim is only worth anything if the codec is
+ * lossless *and* the decoded form still drives the generator to the same
+ * document, so both halves are checked here rather than the codec alone.
+ */
+function verifyLinks() {
+  section('Permalinks');
+
+  const stamp = versionStamp(registry);
+  const toSpec = { group: toGroupSpec, character: toCharacterSpec, creature: toCreatureSpec };
+  // The harness calls the generators directly, so specs go in as
+  // (spec, registry, options) rather than through the api.js wrappers.
+  const build = (kind, spec, options = {}) => ({
+    group: generateEncounter, character: generateCharacter, creature: generateCreature,
+  }[kind])(spec, registry, options);
+  const identity = (result) => (result.ok
+    ? fingerprint(result.encounter || result.sheet)
+    : `refused: ${result.failure.code}`);
+
+  // Deliberately non-default on every field the codec has to carry: a delta
+  // encoding that dropped a field would still pass on a default-shaped form.
+  const cases = [
+    ['group', 'Ember Raven', {
+      partyLevel: 6, partySize: 5, difficulty: 'hard', shape: -1, style: 1,
+      family: 'undead', environment: 'crypt', theme: 'a flooded barrow',
+      maxEnemies: 9, mixedTiers: false, cohesion: false, withPersonality: false }],
+    ['group', 'unseeded', {}],
+    ['character', 'quiet-bell-2200', {
+      level: 11, role: 'leader', theme: 'Harbour Master', abilityMethod: 'point-buy',
+      hpPolicy: 'rolled', spellcaster: 'yes', rangePreference: 'ranged',
+      requiredSkill: 'srd51:skill.insight', named: false }],
+    ['creature', 'thorn-tide-8801', {
+      mode: 'variant', targetCR: '7', creatureType: 'dragon', family: 'any',
+      environment: 'any', role: 'brute', flying: 'yes', theme: 'ash-scarred',
+      withPersonality: false }],
+  ];
+
+  let lossless = true;
+  let reproduces = true;
+  const detail = [];
+  let longest = 0;
+
+  for (const [kind, seed, overrides] of cases) {
+    const form = { ...defaultForm(kind), ...overrides };
+    const before = build(kind, toSpec[kind](seed, form));
+
+    const hash = encodeState({ kind, seed, form, rerolls: {}, stamp });
+    longest = Math.max(longest, hash.length);
+    const link = decodeHash(`#${hash}`);
+    const restored = { ...defaultForm(kind), ...link?.form };
+
+    if (link?.kind !== kind || link.seed !== seed
+      || JSON.stringify(restored) !== JSON.stringify(form)) {
+      lossless = false;
+      detail.push(`${kind}/${seed}: form did not survive the round-trip`);
+      continue;
+    }
+    // An unsatisfiable spec is a legitimate outcome; what a link must promise is
+    // that both sides land in the same place, refusal included.
+    const after = build(kind, toSpec[kind](link.seed, restored));
+    if (identity(before) !== identity(after)) {
+      reproduces = false;
+      detail.push(`${kind}/${seed}: ${identity(before)} != ${identity(after)}`);
+    }
+  }
+
+  assert(lossless, `every form field survives the link round-trip (${cases.length} specs)`, detail.join('\n'));
+  assert(reproduces, `a decoded link regenerates the identical document (longest link ${longest} chars)`, detail.join('\n'));
+
+  // Reroll counters are part of the reproduction contract, so a link made after
+  // a reroll has to carry them or it silently describes the pre-reroll sheet.
+  let rerollsTravel = true;
+  const rerollDetail = [];
+  for (const [kind, scope] of [['character', 'identity'], ['character', 'equipment'], ['creature', 'enemy-actions']]) {
+    const form = defaultForm(kind);
+    const seed = 'link-reroll';
+    const spec = toSpec[kind](seed, form);
+    const plain = build(kind, spec);
+    // Two presses of the same reroll button, built here rather than taken from
+    // a sheet, so the counters the link carries are checked against an
+    // independently derived set.
+    const counters = applyReroll(applyReroll({}, scope), scope);
+    const rerolled = build(kind, spec, { rerolls: counters });
+
+    const link = decodeHash(`#${encodeState({ kind, seed, form, rerolls: counters, stamp })}`);
+    const after = build(kind, toSpec[kind](link.seed, { ...defaultForm(kind), ...link.form }),
+      { rerolls: link.rerolls });
+
+    // Guard against a vacuous pass: if the reroll changed nothing, the two
+    // fingerprints would match whether the counters travelled or not.
+    if (fingerprint(plain.sheet) === fingerprint(rerolled.sheet)) {
+      rerollsTravel = false;
+      rerollDetail.push(`${kind}/${scope}: the reroll itself changed nothing, so this proves nothing`);
+    } else if (!after.ok || fingerprint(after.sheet) !== fingerprint(rerolled.sheet)) {
+      rerollsTravel = false;
+      rerollDetail.push(`${kind}/${scope}: the link did not reproduce the rerolled sheet`);
+    }
+  }
+  assert(rerollsTravel, 'reroll counters travel in the link and reproduce the rerolled sheet',
+    rerollDetail.join('\n'));
+
+  // A hash is user-editable and arrives from strangers. It may not throw, and
+  // it may not write anything the form did not ask for.
+  const hostile = [
+    ['', null], ['#', null], ['#kind=wizard&seed=x', null], ['#seed=x&partyLevel=9', null],
+    ['#kind=group&seed=Ember+Raven&partyLevel=6&partySi', 'partial'],
+    ['#kind=group&seed=x&partyLevel=banana', 'default'],
+    ['#kind=group&seed=x&__proto__[polluted]=yes', 'clean'],
+    ['#kind=group&seed=x&nonsense=1&script=<img src=x>', 'clean'],
+  ];
+  let safe = true;
+  const safeDetail = [];
+  for (const [hash, expectation] of hostile) {
+    let link;
+    try {
+      link = decodeHash(hash);
+    } catch (error) {
+      safe = false; safeDetail.push(`${hash || '(empty)'} threw: ${error.message}`); continue;
+    }
+    if (expectation === null && link !== null) { safe = false; safeDetail.push(`${hash || '(empty)'} should not decode`); }
+    if (expectation === 'partial' && link?.form.partyLevel !== 6) { safe = false; safeDetail.push(`${hash} lost the fields it did carry`); }
+    if (expectation === 'default' && link?.form.partyLevel !== DEFAULT_FORMS.group.partyLevel) {
+      safe = false; safeDetail.push(`${hash} did not fall back to the default`);
+    }
+    if (expectation === 'clean' && Object.keys(link?.form || {}).length !== 0) {
+      safe = false; safeDetail.push(`${hash} wrote an unrequested field`);
+    }
+  }
+  assert(safe && {}.polluted === undefined,
+    'malformed, truncated and hostile hashes decode to something safe or to nothing',
+    safeDetail.join('\n'));
+
+  // The delta encoding is the reason a link fits in a chat message.
+  const bare = encodeState({ kind: 'group', seed: 'x', form: defaultForm('group'), rerolls: {}, stamp });
+  assert(bare === `kind=group&seed=x&gen=${stamp}`,
+    `an all-defaults link carries only what it must (${bare.length} chars)`, bare);
+}
+
+const run = commands.length ? commands : ['content', 'rng', 'rules', 'sheets', 'cr', 'encounters', 'links', 'seeds', 'stats'];
 
 console.log(`\x1b[1mVerifying — ${registry.byId.size} content entities from ${registry.packs.map((p) => p.id).join(', ')}\x1b[0m`);
 for (const command of run) {
@@ -618,6 +762,7 @@ for (const command of run) {
   else if (command === 'sheets') verifySheets();
   else if (command === 'cr') verifyCR();
   else if (command === 'encounters') verifyEncounters();
+  else if (command === 'links') verifyLinks();
   else if (command === 'seeds') verifySeeds(update);
   else if (command === 'stats') verifyStats();
   else { console.log(`unknown command: ${command}`); failures++; }
